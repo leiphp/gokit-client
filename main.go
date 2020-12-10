@@ -11,7 +11,9 @@ import (
 	httptransport "github.com/go-kit/kit/transport/http"
 	consulapi "github.com/hashicorp/consul/api"
 	"gokit-client/services"
+	"golang.org/x/time/rate"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"time"
@@ -34,7 +36,7 @@ func main2() {
 }
 
 //客户端通过consul调用服务
-func main() {
+func main3() {
 	{
 		//第一步，创建client
 		config := consulapi.DefaultConfig()
@@ -82,4 +84,23 @@ func main() {
 		}
 	}
 
+}
+
+//使用rate包达到api限流
+var r = rate.NewLimiter(1,5)
+func MyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter,request *http.Request) {
+		if !r.Allow() {
+			http.Error(writer,"too many requests",http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(writer,request)
+	})
+}
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/",func(writer http.ResponseWriter,request *http.Request) {
+		writer.Write([]byte("OK!!!"))
+	})
+	http.ListenAndServe(":8089",MyLimit(mux))
 }
