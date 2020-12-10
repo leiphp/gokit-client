@@ -60,7 +60,8 @@ func main() {
 				fmt.Println("服务有",len(endpoints),"条")
 
 				//go-kit自带负载均衡
-				mylb := lb.NewRoundRobin(endpointer)
+				//mylb := lb.NewRoundRobin(endpointer)//轮询
+				mylb := lb.NewRandom(endpointer,time.Now().UnixNano())//随机
 				for{
 					//getUserInfo := endpoints[0]//写死第一条
 					getUserInfo, _ := mylb.Endpoint()//轮询客户端获取服务
