@@ -3,16 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/go-kit/kit/endpoint"
-	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/sd"
-	"github.com/go-kit/kit/sd/consul"
-	"github.com/go-kit/kit/sd/lb"
+	"github.com/afex/hystrix-go/hystrix"
 	httptransport "github.com/go-kit/kit/transport/http"
-	consulapi "github.com/hashicorp/consul/api"
 	"gokit-client/services"
+	"gokit-client/utils"
 	"golang.org/x/time/rate"
-	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,57 +31,6 @@ func main2() {
 	fmt.Println(userinfo.Result)
 }
 
-//客户端通过consul调用服务
-func main3() {
-	{
-		//第一步，创建client
-		config := consulapi.DefaultConfig()
-		config.Address = "192.168.1.104:8500" //虚拟机consul服务地址
-		api_client, _ := consulapi.NewClient(config)
-		client := consul.NewClient(api_client)
-
-		var logger log.Logger
-		{
-			logger = log.NewLogfmtLogger(os.Stdout)
-		}
-		{
-			tags := []string{"primary"}
-			//可实时查询服务实例的状态信息
-			instancer := consul.NewInstancer(client,logger,"gokitservice",tags,true)
-			{
-				factory := func(service_url string) (endpoint.Endpoint,io.Closer,error) {
-					tart,_ := url.Parse("http://"+service_url) //192.168.1.103:8080真实服务ip地址
-					return httptransport.NewClient("GET",tart,services.GetUserInfo_Request,services.GetUserInfo_Response).Endpoint(),nil,nil
-				}
-				endpointer := sd.NewEndpointer(instancer,factory,logger)
-				endpoints,_ := endpointer.Endpoints()
-				fmt.Println("服务有",len(endpoints),"条")
-
-				//go-kit自带负载均衡
-				//mylb := lb.NewRoundRobin(endpointer)//轮询
-				mylb := lb.NewRandom(endpointer,time.Now().UnixNano())//随机
-				for{
-					//getUserInfo := endpoints[0]//写死第一条
-					getUserInfo, _ := mylb.Endpoint()//轮询客户端获取服务
-					ctx := context.Background() //第三步，创建一个context上下文对象
-					//第四步，执行
-					res,err := getUserInfo(ctx,services.UserRequest{Uid:101})
-					if err != nil {
-						fmt.Println(err)
-						os.Exit(1)
-					}
-					//第五步，断言，得到相应值
-					userinfo := res.(services.UserResponse)
-					fmt.Println(userinfo.Result)
-					time.Sleep(time.Second * 3)
-				}
-
-			}
-		}
-	}
-
-}
-
 //使用rate包达到api限流
 var r = rate.NewLimiter(1,5)
 func MyLimit(next http.Handler) http.Handler {
@@ -97,10 +42,35 @@ func MyLimit(next http.Handler) http.Handler {
 		next.ServeHTTP(writer,request)
 	})
 }
-func main() {
+func main4() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/",func(writer http.ResponseWriter,request *http.Request) {
 		writer.Write([]byte("OK!!!"))
 	})
 	http.ListenAndServe(":8089",MyLimit(mux))
+}
+
+
+func main() {
+	configA := hystrix.CommandConfig{
+		Timeout:2000,
+		MaxConcurrentRequests:5,
+		RequestVolumeThreshold:3,
+		ErrorPercentThreshold:20,
+		SleepWindow:int(time.Second*100),
+	}
+	hystrix.ConfigureCommand("getuser",configA)
+	err := hystrix.Do("getuser",func() error{
+		res,err := utils.GetUser()
+		fmt.Println(res)
+		return err
+	},func (e error) error{
+		fmt.Println("降级用户")
+		return e
+	})
+	if err != nil {
+		log.Fatal(err)
+
+	}
+
 }
